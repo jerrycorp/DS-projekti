@@ -1,0 +1,25 @@
+ports:
+    client communication: 25566
+    server communication: 25567
+
+CLIENT:
+    to broker:
+        send work:
+            send:
+              {"user": "client", "id": 123, "cmd": "workLoad", [5,6,7,8,9]}
+            receive:
+              Nothing
+        initial connection:
+            send:
+              {"user": "client", "cmd": "join", "id": None}
+            receive:
+              {"id": 1234}
+        graceful exit:
+            {"user": "client", "cmd": "leave", "id": 123}
+BROKER:
+    to CLIENT:
+        workdone:
+          {"cmd": "result", "result": {20: [1,2,4,5,10], 17: [1,17]}}
+
+SERVER:
+    to SERVER:
