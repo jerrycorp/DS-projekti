@@ -11,7 +11,7 @@ json:
 global s
 brokerIP="127.0.0.1"
 PORT = 25566
-clientID = 1
+clientID = None
 
 def UILoop():
     while True:
@@ -23,68 +23,87 @@ def UILoop():
 
 def requestNumbers():
     userInput = input("Give a list of integers separated by space: ")
-    intList = userInput.split()
+    intList = userInput.split(" ")
     if(len(intList) == 0):
-        print("Incorrect input")
-
-    for i in range len(intList):
+        print("No input")
+        return "EXIT"
+    try:
+        intList = [int(a) for a in intList]
+    except:
+        print("Not all inputs were int")
+        return "EXIT"
+    print(intList)
+    for i in range(len(intList)):
+        break
         if(type(intList[i]) == int):
-                if(intList[i] > 0):
-                    return intList:
-                else:
-                    print("Incorrect input")
-                    return "EXIT":
+            if(intList[i] <= 0):
+                break
             else:
-                print("Incorrect input")
-                return "EXIT":
+                pass
+        else:
+            print("Incorrect input")
+            return "EXIT"
+    else:
+        print("Not all numbers were postive")
+        return "EXIT"
+    return intList
 
-def threadGo(function, arguments=None):
+def threadStart(function, arguments=None):
     cThread = threading.Thread(target=function)
     cThread.daemon = True
     cThread.start()
 
 def sendWork(numbers):
     global clientID
-    send({"user": "client", "id": clientID, "cmd": "work", "workLoad": numbers}
+    send({"user": "client", "id": clientID, "cmd": "work", "workLoad": numbers})
 
 def send(jsonAbleString):
     global s
     s.send(json.dumps(jsonAbleString).encode())
 
+def pause():
+    time.sleep(2)
+    print("break")
+
 def startTCPListener(brokerIP=brokerIP, port=PORT):
     global s
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((brokerIP, PORT))
+    join(s)
     while True:
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.connect((brokerIP, PORT))
-                while True:
-                    data = s.recv(1024)
-                    print("received", data.decode())
-                    data = json.load(data)
-                    if data["cmd"] == "result":
-                        print(data)
-                    if data["cmd"] == "workAccept":
-                        print(data)
-                    if data["cmd"] == "ping":
-                        send("pong")
-                        print(data)
+            data = s.recv(1024).decode()
+            print("received", data)
+            print(data)
+            data = json.loads(data)
+            try:
+                if data["cmd"] == "result":
+                    print(data)
+                elif data["cmd"] == "workAccept":
+                    print(data)
+                elif data["cmd"] == "ping":
+                    send("pong")
+                    print(data)
+            except KeyError:
+                continue
         except KeyboardInterrupt:
             s.close()
             break
         except Exception as e:
+            print("TCPLISTENER CRASHED")
             print(e)
             s.close()
 
 def readID(fileName="clientID"):
-    f = open(fileName, "r")
-    temp = f.read().strip()
-    if(temp == "")
-        temp = getClientID()
-    return temp
+    with open(fileName, "r") as f:
+        temp = f.read().strip()
+        if(temp == ""):
+            temp = None
+        return temp
 
 def writeID(clientID, fileName="clientID"):
     f = open(fileName, "w")
-    f.write(string(clientID))
+    f.write(str(clientID))
 
 def getClientID(brokerIP=brokerIP, port=PORT):
     global clientID
@@ -93,10 +112,16 @@ def getClientID(brokerIP=brokerIP, port=PORT):
         s.send(json.dumps({"user": "client", "cmd": "join", "id": readID()}).encode())
         data = s.recv(1024).decode().strip()
         clientID = json.loads(data)["id"]
+        writeID(clientID)
+
+def join(s):
+    s.send(json.dumps({"user": "client", "cmd": "join", "id": clientID}).encode())
 
 def main():
     getClientID()
-    startTCPListener()
+    threadStart(startTCPListener)
+    time.sleep(1)
     UILoop()
 
 if __name__ == "__main__":
+    main()

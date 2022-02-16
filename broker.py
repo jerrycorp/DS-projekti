@@ -3,32 +3,68 @@ import socket
 import json
 import threading
 import time
+from datetime import datetime
+import traceback
+import variables
+
+
 
 #STATIC
 brokerIP="127.0.0.1"
 PORT = 25566
 IDFilename = "ids.txt"
 #VARIABLES
-servers = []
-clients = []
-works = []
-jobs = []
-pendingJobs = {} # {time.time(), job}
+from variables import servers
+from variables import clients
+from variables import works
+from variables import jobs
+from variables import pendingJobs
+#servers = []
+#clients = []
+#works = []
+#jobs = []
+#pendingJobs = {} # {time.time(), job}
 
+## TODO: make client and server handle disconnects
+## TODO: implement pendingjobs as a queue for jobs not accepted yet
+## TODO: handle crashed servers
+## TODO: clean up printing and input in client
+
+def getNextID():#client/server
+    ## Return next id based on the next avaiable id that is also written on disk
+    try:
+        file = open(IDFilename, "r")
+    except FileNotFoundError:
+        file = open(IDFilename, "w")
+        file.write("0")
+        file.close()
+        file = open(IDFilename, "r")
+    finally:
+        id = int(file.read()) + 1
+        file.close()
+        file = open(IDFilename, "w")
+        file.write(str(id))
+        return id
 
 class Work:
-    def __init__ (self, work, clientID, workID):
-        self.work =  work #{1: None,2: None ,3: None, 4: None}
+    def __init__ (self, work, clientID, workID=getNextID()):
+        self.work = {}
+        for w in work:
+            self.work[w] = None
         self.clientID = clientID #123
         self.workID = workID
     def addResult(self, number, result):
-        self.work[number] = result
-        if not None in list(self.work.values):
-            global clients
-            for client in clients:
-                if client.clientID==self.clientID:
-                    client.sendResults()
-                    client.works.remove(self)
+        try:
+            print("added result")
+            self.work[number] = result
+            if not None in list(self.work.values()):
+                global clients
+                for client in clients:
+                    if client.clientID==self.clientID:
+                        client.sendResults(self)
+                        client.works.remove(self)
+        except:
+            traceback.print_exc()
         ## TODO: check if done
 
 class job:
@@ -38,21 +74,26 @@ class job:
         self.workID = workID
 
 class Server:
-    def __init__ (self, serverID, serverSocket, maxWork):
+    def __init__ (self, serverID, sock, maxWork):
+        self.type="server"
         self.serverID = serverID
-        self.serverSocket = serverSocket
+        self.sock = sock
         self.jobs = []
         self.maxWork = maxWork
         self.lastActive = time.time()
-        self.lastPinged = None
+        self.lastPinged = time.time()
+        self.send({})
+        global servers
+        servers.append(self)
     def sendJob(self, job):
         self.jobs.append(job)
         self.send({"cmd": "doWork", "workID": job.workID, "workload": job.number })
     def send(self, jsonAbleString):
-        jsonAbleString[id] = self.serverID
-        jsonAbleString[user] = "server"
-        self.serverSocket.send(json.dump(jsonAbleString).encode())
+        jsonAbleString["id"] = self.serverID
+        jsonAbleString["user"] = "server"
+        self.sock.send(json.dumps(jsonAbleString).encode())
     def sendPing(self):
+        print(f"pinging {self.serverID}")
         self.lastPinged = time.time()
         self.send({"cmd": "ping"})
     def removeJob(self, workID, number, results):
@@ -61,46 +102,37 @@ class Server:
                 self.jobs.remove(job)
 
 class Client:
-    def __init__ (self, clientID, clientSocket):
+    def __init__ (self, clientID, sock):
+        self.type="client"
         self.clientID = clientID
-        self.clientSocket = clientSocket
+        self.sock = sock
         self.works = []
         self.lastActive = time.time()
-        self.lastPinged = None
+        self.lastPinged = time.time()
+        self.send({})
+        global clients
+        clients.append(self)
     def addWork(self, work):
         global jobs
         self.works.append(work)
         for number in work.work:
-            jobs.append(job(number, self.clientID, self.workID))
+            jobs.append(job(number, self.clientID, work.workID))
     def send(self, jsonAbleString):
-        jsonAbleString[id] = self.clientID
-        jsonAbleString[user] = "client"
-        self.clientSocket.send(json.dump(jsonAbleString).encode())
+        jsonAbleString["id"] = self.clientID
+        jsonAbleString["user"] = "client"
+        self.sock.send(json.dumps(jsonAbleString).encode())
     def sendResults(self, work):
         self.send({"cmd": "result", "result": work.work})
     def sendPing(self):
+        print(f"pinging {self.clientID}")
         self.lastPinged = int(time.time())
         self.send({"cmd": "ping"})
 
-def getNextID():#client/server
-    ## Return next id based on the next avaiable id that is also written on disk
-    try:
-        file = open(IDFilename, "r")
-    except FileNotFoundError:
-        file = open(IDFilename, "w")
-        file.write(0)
-        file.close()
-        file = open(IDFilename, "r")
-    finally:
-        id = file.read() + 1
-        file.close()
-        file = open(IDFilename, "w")
-        file.write(id)
-        return id
 
 def handlerLoop(user, userType):
+    c = user.sock
     try:
-        print(f"Looping {userType} messages")
+        print(f"Looping {userType} message:")
         while True:
             data = c.recv(1024).decode().strip()
             if not data:
@@ -109,37 +141,46 @@ def handlerLoop(user, userType):
             try:
                 data = json.loads(data)
                 if userType=="client":
-                    clientCommandParser(data, client)
+                    clientCommandParser(data, user)
                 elif userType=="server":
-                    serverCommandParser(data, client)
-            except:
-                pass
+                    serverCommandParser(data, user)
+            except Exception as e:
+                traceback.print_exc()
+                print(e)
     except UnicodeDecodeError:
         write("UnicodeDecodeError")
         c.close()
     except OSError:
         write("OSError")
+        if user.type == "server":
+            servers.remove(user)
+        elif user.type == "client":
+            clients.remove(user)
         c.close()
 
 def clientCommandParser(data, client):
+    print("parsing client message")
     if data["cmd"]=="ping":
         client.send({"cmd": "pong"})
     elif data["cmd"]=="pong":
         client.lastActive = int(time.time())
     elif data["cmd"]=="work":
+        print("adding work")
         client.lastActive = int(time.time())
-        client.addWork(data["workLoad"])
+        client.addWork(Work(data["workLoad"], client.clientID))
     ## TODO: parse commands
 
-def serverHandlerLoop(data, server):
+def serverCommandParser(data, server):
+    print("parsing server message")
     global clients
     if data["cmd"]=="ping":
         client.send({"cmd": "pong"})
     if data["cmd"]=="pong":
         server.lastActive = int(time.time())
     if data["cmd"] == "results":
+        print("received results")
         server.lastActive = int(time.time())
-        workID = data["id"]
+        workID = data["workID"]
         server.removeJob(data["workID"], data["number"], data["results"])
         for cli in clients:
             for wor in cli.works:
@@ -160,17 +201,18 @@ def initialHandler(c, a):
                 if data["user"] == "client":
                     if data["id"]:
                         print("OLD CONNECTION")
-                        handlerLoop(client(data["id"], c))
+                        handlerLoop(Client(data["id"], c), "client")
                     else:
-                        handlerLoop(client(getNextID(), c))
+                        handlerLoop(Client(getNextID(), c), "client")
                 elif data["user"] == "server":
                     maxWork = data["maxWork"]
                     if data["id"]:
                         print("OLD CONNECTION")
-                        handlerLoop(client(data["id"], c, maxWork))
+                        handlerLoop(Server(data["id"], c, maxWork), "server")
                     else:
-                        handlerLoop(client(getNextID(), c, maxWork))
+                        handlerLoop(Server(getNextID(), c, maxWork), "server")
         except Exception as e:
+            traceback.print_exc()
             print("crashed at tcp accept:", e)
     except UnicodeDecodeError:
         write("UnicodeDecodeError")
@@ -227,19 +269,25 @@ def workHandler():
     global s
     global clients
     while True:
-        time.sleep(1)
+        time.sleep(10)
+        print("checking for work")
+        print("jobs", jobs)
+        print("clients:", clients)
+        print("servers:", servers)
         for n in servers:
             ## TODO: go through pendingJobs. if taken more than 10 seconds move back to jobs
             if((n.lastActive - n.lastPinged) > 10):
                 n.sendPing()
 
-            if(len(jobs > 0)):
-                if(n.maxwork > len(n.jobs)):
+            if(len(jobs) > 0):
+                print("adding work")
+                if(n.maxWork > len(n.jobs)):### TODO: make it give max amount of jobs.
+                    print("found server with free space")
                     job = jobs.pop(0)
                     try:
-                        server.sendJob(job)
+                        n.sendJob(job)
                     except:
-                        pass
+                        traceback.print_exc()
 
 
 
