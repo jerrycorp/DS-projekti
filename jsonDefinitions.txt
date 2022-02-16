@@ -6,9 +6,9 @@ CLIENT:
     to broker:
         send work:
             send:
-              {"user": "client", "id": 123, "cmd": "workLoad", [5,6,7,8,9]}
+              {"user": "client", "id": 123, "cmd": "work", "workLoad": [5,6,7,8,9]}
             receive:
-              Nothing
+              {"cmd": "workAccept", "workLoad": [5,6,7,8,9], "workID":123}
         initial connection:
             send:
               {"user": "client", "cmd": "join", "id": None}
@@ -20,6 +20,26 @@ BROKER:
     to CLIENT:
         workdone:
           {"cmd": "result", "result": {20: [1,2,4,5,10], 17: [1,17]}}
+        ping:
+          {"cmd": "ping"}}
+    to SERVER:
+        workload:
+          send:
+            {"cmd": "doWork", "workID": workID, "workload": number }
+          receive:
+              {"cmd": "workAccept"}
+          ping:
+            send:
+              {"cmd": "ping"}
+            receive
+              {"cmd": "pong"}
 
 SERVER:
-    to SERVER:
+    to BROKER:
+      initial connection:
+          send:
+            {"user": "server", "cmd": "join", "id": None, "maxWork": 3}
+          receive:
+            {"id": 1234}
+      workdone:
+          {"user": "server", "id": 123, "cmd": "results", "workID": 123, "work": number, "results": [5,6,7,8,9]}

@@ -2,6 +2,7 @@ import time
 import socket
 import json
 import threading
+
 """
 json:
 {"cmd": ""}
@@ -44,7 +45,7 @@ def threadGo(function, arguments=None):
 
 def sendWork(numbers):
     global clientID
-    send({"user": "client", "id": clientID, "cmd": "workLoad", numbers}
+    send({"user": "client", "id": clientID, "cmd": "work", "workLoad": numbers}
 
 def send(jsonAbleString):
     global s
@@ -59,6 +60,14 @@ def startTCPListener(brokerIP=brokerIP, port=PORT):
                 while True:
                     data = s.recv(1024)
                     print("received", data.decode())
+                    data = json.load(data)
+                    if data["cmd"] == "result":
+                        print(data)
+                    if data["cmd"] == "workAccept":
+                        print(data)
+                    if data["cmd"] == "ping":
+                        send("pong")
+                        print(data)
         except KeyboardInterrupt:
             s.close()
             break
@@ -67,27 +76,26 @@ def startTCPListener(brokerIP=brokerIP, port=PORT):
             s.close()
 
 def readID(fileName="clientID"):
-    global clientID
     f = open(fileName, "r")
     temp = f.read().strip()
     if(temp == "")
         temp = getClientID()
-    clientID = temp
+    return temp
 
 def writeID(clientID, fileName="clientID"):
     f = open(fileName, "w")
     f.write(string(clientID))
 
 def getClientID(brokerIP=brokerIP, port=PORT):
+    global clientID
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect((brokerIP, PORT))
-        s.send(json.dumps({"user": "client", "cmd": "join", "id": None}).encode())
+        s.send(json.dumps({"user": "client", "cmd": "join", "id": readID()}).encode())
         data = s.recv(1024).decode().strip()
         clientID = json.loads(data)["id"]
-    return clientID
 
 def main():
-    readID()
+    getClientID()
     startTCPListener()
     UILoop()
 
