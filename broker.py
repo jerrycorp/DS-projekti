@@ -5,7 +5,7 @@ import threading
 import time
 from datetime import datetime
 import traceback
-import variables
+from dataclasses import dataclass
 
 
 
@@ -14,23 +14,18 @@ brokerIP="127.0.0.1"
 PORT = 25566
 IDFilename = "ids.txt"
 #VARIABLES
-from variables import servers
-from variables import clients
-from variables import works
-from variables import jobs
-from variables import pendingJobs
-#servers = []
-#clients = []
-#works = []
-#jobs = []
-#pendingJobs = {} # {time.time(), job}
+servers = []
+clients = []
+works = []
+jobs = [] #unshared jobs
+pendingJobs = [] # {"job": job, "time":time.time()}
 
+
+## TODO: some jobs are lost on the way to the client
 ## TODO: make client and server handle disconnects
-## TODO: implement pendingjobs as a queue for jobs not accepted yet
 ## TODO: handle crashed servers
-## TODO: clean up printing and input in client
 
-def getNextID():#client/server
+def getNextID():#client/server/work
     ## Return next id based on the next avaiable id that is also written on disk
     try:
         file = open(IDFilename, "r")
@@ -53,6 +48,7 @@ class Work:
             self.work[w] = None
         self.clientID = clientID #123
         self.workID = workID
+        print(f"created work with {len(self.work.keys())} items")
     def addResult(self, number, result):
         try:
             print("added result")
@@ -67,11 +63,16 @@ class Work:
             traceback.print_exc()
         ## TODO: check if done
 
-class job:
+class Job:
     def __init__ (self, number, clientID, workID):
         self.number =  number
         self.clientID = clientID
         self.workID = workID
+
+@dataclass
+class PendingJob:
+    job: Job
+    time: int
 
 class Server:
     def __init__ (self, serverID, sock, maxWork):
@@ -79,6 +80,7 @@ class Server:
         self.serverID = serverID
         self.sock = sock
         self.jobs = []
+        self.pendingjobs = []
         self.maxWork = maxWork
         self.lastActive = time.time()
         self.lastPinged = time.time()
@@ -86,7 +88,9 @@ class Server:
         global servers
         servers.append(self)
     def sendJob(self, job):
+        global pendingjobs
         self.jobs.append(job)
+        pendingJobs.append(PendingJob(job, time.time()))
         self.send({"cmd": "doWork", "workID": job.workID, "workload": job.number })
     def send(self, jsonAbleString):
         jsonAbleString["id"] = self.serverID
@@ -97,9 +101,10 @@ class Server:
         self.lastPinged = time.time()
         self.send({"cmd": "ping"})
     def removeJob(self, workID, number, results):
-        for job in jobs:
+        for job in self.jobs:
             if job.workID==workID and job.number==number:
                 self.jobs.remove(job)
+
 
 class Client:
     def __init__ (self, clientID, sock):
@@ -116,12 +121,13 @@ class Client:
         global jobs
         self.works.append(work)
         for number in work.work:
-            jobs.append(job(number, self.clientID, work.workID))
+            jobs.append(Job(number, self.clientID, work.workID))
     def send(self, jsonAbleString):
         jsonAbleString["id"] = self.clientID
         jsonAbleString["user"] = "client"
         self.sock.send(json.dumps(jsonAbleString).encode())
     def sendResults(self, work):
+        print(f"sending result with {len(work.work.keys())}")
         self.send({"cmd": "result", "result": work.work})
     def sendPing(self):
         print(f"pinging {self.clientID}")
@@ -131,6 +137,7 @@ class Client:
 
 def handlerLoop(user, userType):
     c = user.sock
+    partial = ""
     try:
         print(f"Looping {userType} message:")
         while True:
@@ -138,15 +145,25 @@ def handlerLoop(user, userType):
             if not data:
                 c.close()
             write(c.getpeername()[0] + ",  "  + data)
-            try:
+            print("received", data)
+            partial += data
+            if partial[-1]=="}":
+                data=partial
+                partial = ""
+            else:
+                continue
+            datas = [a+"}" for a in data.split("}")[:-1]]
+            for data in datas:
+                print(f"trying to open{data}")
                 data = json.loads(data)
-                if userType=="client":
-                    clientCommandParser(data, user)
-                elif userType=="server":
-                    serverCommandParser(data, user)
-            except Exception as e:
-                traceback.print_exc()
-                print(e)
+                try:
+                    if userType=="client":
+                        clientCommandParser(data, user)
+                    elif userType=="server":
+                        serverCommandParser(data, user)
+                except Exception as e:
+                    traceback.print_exc()
+                    print(e)
     except UnicodeDecodeError:
         write("UnicodeDecodeError")
         c.close()
@@ -168,7 +185,6 @@ def clientCommandParser(data, client):
         print("adding work")
         client.lastActive = int(time.time())
         client.addWork(Work(data["workLoad"], client.clientID))
-    ## TODO: parse commands
 
 def serverCommandParser(data, server):
     print("parsing server message")
@@ -187,6 +203,15 @@ def serverCommandParser(data, server):
                 if(wor.workID == workID):
                     wor.addResult(data["number"], data["results"])
                     #j.sendResults(data["results"])
+    if data["cmd"] == "accept":
+        global pendingJobs
+        removable = []
+        for pendingjob in pendingJobs:
+            job = pendingjob.job
+            if job.workID==data["workID"] and job.number==data["number"]:
+                removable.append(pendingjob)
+        pendingJobs = [x for x in pendingJobs if x not in removable]
+
 
 def initialHandler(c, a):
     try:
@@ -268,32 +293,75 @@ def workHandler():
     global jobs
     global s
     global clients
+    global pendingJobs
+    oldPrint = ""
     while True:
-        time.sleep(10)
-        print("checking for work")
-        print("jobs", jobs)
-        print("clients:", clients)
-        print("servers:", servers)
+        time.sleep(0.5)
+        if str([pendingJobs, jobs, servers, clients]) != oldPrint:
+            print("checking for work")
+            print("pending jobs:", pendingJobs)
+            print("jobs:", jobs)
+            print("clients:", clients)
+            print("servers:", servers)
+            oldPrint = str([pendingJobs, jobs, servers, clients])
+        else:
+            pass
+
         for n in servers:
-            ## TODO: go through pendingJobs. if taken more than 10 seconds move back to jobs
+            print(f"server has {len(n.jobs)} currently underwork")
+            # Go through pendingJobs. if taken more than 10 seconds move back to jobs
+            t = time.time()
+
+            removable = []
+            for pjob in pendingJobs:
+                #print(pjob)
+                if pjob.time - t > 10:
+                    jobs.append(pjob.job)
+                    removable.append(pjob)
+
+            pendingJobs = [x for x in pendingJobs if x not in removable]
+
             if((n.lastActive - n.lastPinged) > 10):
                 n.sendPing()
 
+            #Check if jobs are available
             if(len(jobs) > 0):
+                maxWork = n.maxWork
+                currentWork = len(n.jobs)
                 print("adding work")
-                if(n.maxWork > len(n.jobs)):### TODO: make it give max amount of jobs.
+                #Fill the server with work if it isn't already full
+                if(maxWork > currentWork):
                     print("found server with free space")
-                    job = jobs.pop(0)
-                    try:
-                        n.sendJob(job)
-                    except:
-                        traceback.print_exc()
+                    for i in range(maxWork-currentWork):
+                        if len(jobs) == 0:
+                            break
+                        job = jobs.pop(0)#check if empty / only add as many work as there are
+                        try:
+                            n.sendJob(job)
+                        except:
+                            traceback.print_exc()
 
+def evaluation():
+    while True:
+        time.sleep(1)
+        print("Writing in evaluation file...")
 
+        numberOfServers = len(servers)
+        numberOfClients = len(clients)
+        numberOfPendingJobs = len(pendingJobs)
+        numberOfWaitingJobs = len(jobs)
+        numberOfJobsOnserver = []
+        for n in servers:
+            numberOfJobsOnserver.append(len(n.jobs))
+        jsonAbleString = {"timestamp": str(datetime.now()), "servers": numberOfServers, "clients": numberOfClients, "jobs": numberOfJobsOnserver, "pendingJobs": numberOfPendingJobs, "waitingJobs": numberOfWaitingJobs}
+        with open("evaluation.txt", "a") as f:
+            f.write("\n")
+            f.write(json.dumps(jsonAbleString))
 
 def main():
     threadStart(TCPListener)
     threadStart(workHandler)
+    threadStart(evaluation)
     try:
         while True:
             input()
