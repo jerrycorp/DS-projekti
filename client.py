@@ -13,32 +13,13 @@ json:
 
 """
 global s
-brokerIP="127.0.0.1"
+brokerIP="192.168.1.204"
 PORT = 25566
 clientID = None
 results = []
 worklist = []
 maxInt = 15000000
-## TODO: fix sending singular lists
-"""
-Select if you want to view results: v, add numbers to be factored: a or exit: ev
-Give a list of integers separated by space: 123
-[123]
-Traceback (most recent call last):
-  File "G:\Koulu\Distributed systems\client.py", line 161, in <module>
-    main()
-  File "G:\Koulu\Distributed systems\client.py", line 158, in main
-    UILoop()
-  File "G:\Koulu\Distributed systems\client.py", line 26, in UILoop
-    sendWork(numbers)
-  File "G:\Koulu\Distributed systems\client.py", line 86, in sendWork
-    send({"user": "client", "id": clientID, "cmd": "work", "workLoad": numbers})
-  File "G:\Koulu\Distributed systems\client.py", line 90, in send
-    s.send(json.dumps(jsonAbleString).encode())
-ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host
-"""
 
-## TODO: make random number generators generate unique numbers
 @dataclass
 class Work:#(numbers, time):
     numbers: List[int]
@@ -73,13 +54,17 @@ def randomInputGenerator(maxInt=maxInt, amount=20):
     minInt = maxInt/10
     input = []
     for i in range(amount):
-        input.append(random.randint(minInt, maxInt))
+        rand = random.randint(minInt, maxInt)
+        while rand in input:
+            rand = random.randint(minInt, maxInt)
+        input.append(rand)
     return input
 
 def UILoop():
     #Simple console ui
     while True:
-        decision = uiDecision()
+        userInput = input("Select if you want to view results: v, add numbers to be factored: a or exit: e").lower().split()
+        decision = uiDecision(userInput)
         if decision == "work":
             numbers = requestNumbers()
             if numbers == "EXIT":
@@ -93,31 +78,52 @@ def UILoop():
         elif decision =="random":
             sendWork(randomInputGenerator())
         elif decision =="small":
-            sendWork(randomInputGenerator(1000,100))
+            sendWork(randomInputGenerator(100000,100))
+        elif decision =="file":
+            if len(userInput) > 1:
+                requestFromFile(userInput[1])
+            else:
+                print("Use: f {filename}")
 
+def requestFromFile(filename):
+    ## Reads integers from a file to be sent to the broker
+    try:
+        with open(filename) as file:
+            numbers = list(map(int, file.readlines()))
+    except TypeError:
+        print("Input file contains non-integer values!")
+        return
+    except FileNotFoundError:
+        print("File not found!")
+        return
+    sendWork(numbers)
 
 def printResults():
+    ## Prints the results
     if(len(results) > 0):
         for n in results:
             print(n)
     else:
         print("No results yet. Try again later.")
 
-def uiDecision():
+def uiDecision(userInput):
+
     print("Hello world!")
-    userInput = input("Select if you want to view results: v, add numbers to be factored: a or exit: e")
-    if(userInput.lower() == "a"):
+    if(userInput[0][0] == "a"):
         return "work"
-    if(userInput.lower() == "v"):
+    if(userInput[0][0] == "v"):
         return "results"
-    if(userInput.lower() == "e"):
+    if(userInput[0][0] == "e"):
         return "EXIT"
-    if(userInput.lower() == "r"):
+    if(userInput[0][0] == "r"):
         return "random"
-    if(userInput.lower() == "s"):
+    if(userInput[0][0] == "s"):
         return "small"
+    if(userInput[0][0] == "f"):
+        return "file"
 
 def requestNumbers():
+    ## Requests input from user and checks if the input is valid
     global maxInt
     userInput = input("Give a list of integers separated by space: (No larger than 15 000 000)")
     if userInput.lower()[0] == "e":
@@ -133,27 +139,33 @@ def requestNumbers():
         return
     print(intList)
     for i in range(len(intList)):
-        break
         if(type(intList[i]) == int):
-            if(intList[i] <= 0 or intlist[i] > maxInt):
-                break
+            if(len(intList) == len(set(intList))):
+                if(intList[i] <= 0 or intList[i] > maxInt):
+                    print("Int out of bounds")
+                    return
+                #else:
+                    #print("Int out of bounds")
+                    #return
             else:
-                print("Int out of bounds")
+                print("Input shall not include duplicate INTs")
                 return
         else:
             print("Incorrect input")
             return
-    else:
-        print("Not all numbers were postive")
-        return
+    #else:
+    #    print("Not all numbers were postive")
+    #    return
     return intList
 
 def threadStart(function, arguments=None):
+    ## Starts a thread for a function
     cThread = threading.Thread(target=function)
     cThread.daemon = True
     cThread.start()
 
 def sendWork(numbers):
+    ## Send work to the broker
     global clientID
     global worklist
     worklist.append(Work(numbers, time.time()))
@@ -162,6 +174,7 @@ def sendWork(numbers):
 
 
 def send(jsonAbleString):
+    ## Send a tcp message containing a json package to the broker.
     global s
     s.send(json.dumps(jsonAbleString).encode())
 
@@ -170,6 +183,7 @@ def pause():
     print("break")
 
 def startTCPListener(brokerIP=brokerIP, port=PORT):
+    ## Listens for tcp messages
     global s
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -193,15 +207,15 @@ def startTCPListener(brokerIP=brokerIP, port=PORT):
             #print(f"trying to open{data}")
             data = json.loads(data)
             try:
-                if data["cmd"] == "result":
-                    results.append(data["result"])
+                if data["cmd"] == "result": # Received results
+                    results.append(data["result"]) # Add the results to the result list
                     checkWorkList(data["result"])
                     #print(data)
-                elif data["cmd"] == "workAccept":
+                elif data["cmd"] == "workAccept": # Received work accept message
                     pass
                     #print(data)
-                elif data["cmd"] == "ping":
-                    send("pong")
+                elif data["cmd"] == "ping": # Received ping
+                    send("pong") # Respond to ping
                     #print(data)
             except KeyError:
                 continue
@@ -216,6 +230,7 @@ def startTCPListener(brokerIP=brokerIP, port=PORT):
             s.close()
 
 def readID(fileName="clientID"):
+    ## Reads the client ID from a text file
     with open(fileName, "r") as f:
         temp = f.read().strip()
         if(temp == ""):
@@ -223,10 +238,12 @@ def readID(fileName="clientID"):
         return temp
 
 def writeID(clientID, fileName="clientID"):
+    ## Writes the client ID into a text file
     f = open(fileName, "w")
     f.write(str(clientID))
 
 def getClientID(brokerIP=brokerIP, port=PORT):
+    ## Gets a new client ID from the broker
     global clientID
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect((brokerIP, PORT))
@@ -234,8 +251,10 @@ def getClientID(brokerIP=brokerIP, port=PORT):
         data = s.recv(1024).decode().strip()
         clientID = json.loads(data)["id"]
         writeID(clientID)
+        s.close()
 
 def join(s):
+    ## Send initial message to the broker
     s.send(json.dumps({"user": "client", "cmd": "join", "id": clientID}).encode())
 
 def main():

@@ -6,11 +6,12 @@ import json
 import traceback
 import threading
 
-brokerIP="127.0.0.1"
+brokerIP="192.168.1.204"
 PORT = 25566
 ServerID = 1
 
 def doTheWork(workID, workLoad):
+    ## Takes in the workload, calculates the factors and sends the results to the broker
     try:
         print("starting work")
         results = factor(workLoad)
@@ -21,18 +22,22 @@ def doTheWork(workID, workLoad):
         traceback.print_exc()
 
 def sendResults(number, results, workID):
+    ## Sends the results to the broker
     global ServerID
     send({"user": "server", "id": ServerID, "cmd": "results", "workID": workID, "number": number, "results": results})
 
 def acceptJob(number, workID):
+    ## Sends an accept job message
     global ServerID
     send({"user": "server", "id": ServerID, "cmd": "accept", "workID": workID, "number": number})
 
 def send(jsonAbleString):
+    ## Send a tcp message containing a json package
     global s
     s.send(json.dumps(jsonAbleString).encode())
 
 def startTCPListener(brokerIP=brokerIP, port=PORT):
+    ## Listens for the TCP messages
     global s
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -44,9 +49,9 @@ def startTCPListener(brokerIP=brokerIP, port=PORT):
     partial = ""
     while True:
         try:
-            while True:## TODO: Create message handlers
+            while True:
                 data = s.recv(1024).decode()
-                print("received", data)
+                #print("received", data)
                 partial += data
                 if partial[-1]=="}":
                     data=partial
@@ -64,6 +69,7 @@ def startTCPListener(brokerIP=brokerIP, port=PORT):
                             acceptJob(workLoad, workID)
                             threadStart(doTheWork, (workID, workLoad))
                         elif data["cmd"]=="ping":
+                            #print("Server sending a pong to the broker")
                             send({"cmd": "pong"})
                     except KeyError:
                         continue
@@ -80,20 +86,27 @@ def startTCPListener(brokerIP=brokerIP, port=PORT):
             s.close()
 
 def join(s):
-    s.send(json.dumps({"user": "server", "cmd": "join", "id": serverID, "maxWork": os.cpu_count()}).encode())
+    s.send(json.dumps({"user": "server", "cmd": "join", "id": serverID, "maxWork": 5*os.cpu_count()}).encode())
 
 def readID(fileName="serverID"):
-    f = open(fileName, "r")
-    temp = f.read().strip()
-    if(temp == ""):
-        temp = None
-    return temp
+    ## Reads the server ID from a text file.
+    try:
+        f = open(fileName, "r")
+        temp = f.read().strip()
+        if(temp == ""):
+            temp = None
+        return temp
+    except FileNotFoundError:
+        print("new instance")
+        return None
 
 def writeID(clientID, fileName="serverID"):
+    ## Writes the server ID into a text file
     f = open(fileName, "w")
     f.write(str(serverID))
 
 def getServerID(brokerIP=brokerIP, port=PORT):
+    ## Gets a new server ID from the broker
     global serverID
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect((brokerIP, PORT))
@@ -101,9 +114,11 @@ def getServerID(brokerIP=brokerIP, port=PORT):
         data = s.recv(1024).decode().strip()
         serverID = json.loads(data)["id"]
         writeID(serverID)
+        s.close()
 
 
 def factor(number):
+    ## Calculates the factors of a number
     result = []
     displayed = []
     for i in range(1,math.ceil(number/2)+1):
@@ -116,6 +131,7 @@ def factor(number):
     return result
 
 def threadStart(function, arguments=None):
+    ## Starts a thread for a function
     if arguments:
         cThread = threading.Thread(target=function,args=arguments)
     else:

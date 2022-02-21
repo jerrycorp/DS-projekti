@@ -19,11 +19,10 @@ clients = []
 works = []
 jobs = [] #unshared jobs
 pendingJobs = [] # {"job": job, "time":time.time()}
+ready = False
 
 
-## TODO: some jobs are lost on the way to the client
-## TODO: make client and server handle disconnects
-## TODO: handle crashed servers
+## TODO: REMOVE SERVERS THAT DON'T ANSWER TO PING
 
 def getNextID():#client/server/work
     ## Return next id based on the next avaiable id that is also written on disk
@@ -48,10 +47,11 @@ class Work:
             self.work[w] = None
         self.clientID = clientID #123
         self.workID = workID
-        print(f"created work with {len(self.work.keys())} items")
+        #print(f"created work with {len(self.work.keys())} items")
+    ## Add a result to a work object and if all the results are added, send a result to the client
     def addResult(self, number, result):
         try:
-            print("added result")
+            #print("added result")
             self.work[number] = result
             if not None in list(self.work.values()):
                 global clients
@@ -61,7 +61,6 @@ class Work:
                         client.works.remove(self)
         except:
             traceback.print_exc()
-        ## TODO: check if done
 
 class Job:
     def __init__ (self, number, clientID, workID):
@@ -80,31 +79,44 @@ class Server:
         self.serverID = serverID
         self.sock = sock
         self.jobs = []
-        self.pendingjobs = []
+        self.pendingJobs = []
         self.maxWork = maxWork
         self.lastActive = time.time()
         self.lastPinged = time.time()
-        self.send({})
+        self.send({})#sends id
         global servers
         servers.append(self)
+    #Send a job to the server
     def sendJob(self, job):
-        global pendingjobs
+        global pendingJobs
         self.jobs.append(job)
         pendingJobs.append(PendingJob(job, time.time()))
         self.send({"cmd": "doWork", "workID": job.workID, "workload": job.number })
+    #Send a tcp message to a server containing a json package
     def send(self, jsonAbleString):
         jsonAbleString["id"] = self.serverID
         jsonAbleString["user"] = "server"
         self.sock.send(json.dumps(jsonAbleString).encode())
+    #Send a ping to a server
     def sendPing(self):
-        print(f"pinging {self.serverID}")
+        #print(f"pinging {self.serverID}")
         self.lastPinged = time.time()
         self.send({"cmd": "ping"})
+    #Remove a job from a server
     def removeJob(self, workID, number, results):
         for job in self.jobs:
             if job.workID==workID and job.number==number:
                 self.jobs.remove(job)
-
+    def delete(self):
+        global servers
+        global jobs
+        jobs += self.jobs
+        jobs += self.pendingJobs
+        servers.remove(self)
+        try:
+            self.sock.close()
+        except:
+            traceback.print_exc()
 
 class Client:
     def __init__ (self, clientID, sock):
@@ -117,35 +129,39 @@ class Client:
         self.send({})
         global clients
         clients.append(self)
+    #Add work for a client
     def addWork(self, work):
         global jobs
         self.works.append(work)
         for number in work.work:
             jobs.append(Job(number, self.clientID, work.workID))
+    #Send a tcp message to a client containing a json package
     def send(self, jsonAbleString):
         jsonAbleString["id"] = self.clientID
         jsonAbleString["user"] = "client"
         self.sock.send(json.dumps(jsonAbleString).encode())
+    #Send results to a client
     def sendResults(self, work):
-        print(f"sending result with {len(work.work.keys())}")
+        #print(f"sending result with {len(work.work.keys())}")
         self.send({"cmd": "result", "result": work.work})
+    #Send a ping to a client
     def sendPing(self):
-        print(f"pinging {self.clientID}")
+        #print(f"pinging {self.clientID}")
         self.lastPinged = int(time.time())
         self.send({"cmd": "ping"})
 
-
+#Main loop for handling the messages from clients and servers
 def handlerLoop(user, userType):
     c = user.sock
     partial = ""
     try:
-        print(f"Looping {userType} message:")
+        #print(f"Looping {userType} message:")
         while True:
             data = c.recv(1024).decode().strip()
             if not data:
                 c.close()
-            write(c.getpeername()[0] + ",  "  + data)
-            print("received", data)
+            #write(c.getpeername()[0] + ",  "  + data)
+            #print("received", data)
             partial += data
             if partial[-1]=="}":
                 data=partial
@@ -154,7 +170,7 @@ def handlerLoop(user, userType):
                 continue
             datas = [a+"}" for a in data.split("}")[:-1]]
             for data in datas:
-                print(f"trying to open{data}")
+                #print(f"trying to open{data}")
                 data = json.loads(data)
                 try:
                     if userType=="client":
@@ -167,45 +183,71 @@ def handlerLoop(user, userType):
     except UnicodeDecodeError:
         write("UnicodeDecodeError")
         c.close()
-    except OSError:
-        write("OSError")
+    except IndexError:
         if user.type == "server":
-            servers.remove(user)
+            user.delete()
         elif user.type == "client":
             clients.remove(user)
-        c.close()
+    except OSError:
+        write("OSError")
+        traceback.print_exc()
+        try:
+            c.close()
+        except:
+            print("failed to close socket after handler crash")
+        if user.type == "server":
+            user.delete()
+        elif user.type == "client":
+            clients.remove(user)
 
+    except:
+        traceback.print_exc()
+        try:
+            c.close()
+        except:
+            print("failed to close socket after handler crash")
+        if user.type == "server":
+            user.delete()
+        elif user.type == "client":
+            clients.remove(user)
+
+
+#Handles the messages that come from the clients
 def clientCommandParser(data, client):
-    print("parsing client message")
-    if data["cmd"]=="ping":
-        client.send({"cmd": "pong"})
-    elif data["cmd"]=="pong":
-        client.lastActive = int(time.time())
-    elif data["cmd"]=="work":
-        print("adding work")
-        client.lastActive = int(time.time())
-        client.addWork(Work(data["workLoad"], client.clientID))
+    #print("parsing client message")
+    if data["cmd"]=="ping": #Received ping
+        client.send({"cmd": "pong"}) #Respond to ping
+    elif data["cmd"]=="pong": #Received pong
+        client.lastActive = int(time.time()) #Refresh the lastActive timestamp
+    elif data["cmd"]=="work": #Received work from the client
+        #print("adding work")
+        client.lastActive = int(time.time()) #Refresh the lastActive timestamp
+        client.addWork(Work(data["workLoad"], client.clientID)) #Add the work to client's work list
 
+#Handles the messages that come from the servers
 def serverCommandParser(data, server):
-    print("parsing server message")
+    #print("parsing server message")
     global clients
-    if data["cmd"]=="ping":
-        client.send({"cmd": "pong"})
-    if data["cmd"]=="pong":
-        server.lastActive = int(time.time())
-    if data["cmd"] == "results":
-        print("received results")
-        server.lastActive = int(time.time())
+    if data["cmd"]=="ping": #Received ping
+        client.send({"cmd": "pong"}) #Respond to ping
+    if data["cmd"]=="pong": #Received pong
+        print("Recieved a pong")
+        server.lastActive = int(time.time()) #Refresh the lastActive timestamp
+    if data["cmd"] == "results": #Received results
+        #print("received results")
+        server.lastActive = int(time.time()) #Refresh the lastActive timestamp
         workID = data["workID"]
-        server.removeJob(data["workID"], data["number"], data["results"])
+        server.removeJob(data["workID"], data["number"], data["results"]) # Remove the completed job from job list
+        #Go through the clients and add the result to the client that gave the job
         for cli in clients:
             for wor in cli.works:
                 if(wor.workID == workID):
                     wor.addResult(data["number"], data["results"])
                     #j.sendResults(data["results"])
-    if data["cmd"] == "accept":
+    if data["cmd"] == "accept": #Received the job accept message
         global pendingJobs
         removable = []
+        #Remove the accepted job from the pendingJobs list
         for pendingjob in pendingJobs:
             job = pendingjob.job
             if job.workID==data["workID"] and job.number==data["number"]:
@@ -215,11 +257,11 @@ def serverCommandParser(data, server):
 
 def initialHandler(c, a):
     try:
-        print("REVEIVED CONNECTION")
+        #print("REVEIVED CONNECTION")
         message = c.recv(1024).decode().strip()
         if not message:
             c.close()
-        write(c.getpeername()[0] + ",  "  + message)
+        #write(c.getpeername()[0] + ",  "  + message)
         try:
             data = json.loads(message)
             if data["cmd"] == "join":
@@ -249,13 +291,18 @@ def initialHandler(c, a):
 def send(jsonAbleString, s):
     s.send(json.dumps(jsonAbleString).encode())
 
+#Listens for tcp messages
 def TCPListener(port=PORT):
     try:
+        #Create a socket and start listening
         sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
         sock.bind(('0.0.0.0',port))
         sock.listen(1)
         print("READY")
+        global ready
+        ready = True
         while True:
+            #If a message is recieved, forward it to the initial message handler
             c, a = sock.accept()
             threadStart(initialHandler, (c,a))
     except KeyboardInterrupt:
@@ -266,7 +313,9 @@ def TCPListener(port=PORT):
     except OSError:
         time.sleep(1)
         print("port busy")
-        main()
+        time.sleep(1)
+        TCPListener()
+        #main()
     except:
         traceback.print_exc()
         if type(c) != type(1):
@@ -274,6 +323,7 @@ def TCPListener(port=PORT):
         write("Unexpected error:" + str(sys.exc_info()[0]))
         run = False
 
+#Starts a thread for a function
 def threadStart(function, arguments=None):
     if arguments:
         cThread = threading.Thread(target=function,args=arguments)
@@ -296,42 +346,59 @@ def workHandler():
     global pendingJobs
     oldPrint = ""
     while True:
-        time.sleep(0.5)
-        if str([pendingJobs, jobs, servers, clients]) != oldPrint:
-            print("checking for work")
-            print("pending jobs:", pendingJobs)
-            print("jobs:", jobs)
-            print("clients:", clients)
-            print("servers:", servers)
-            oldPrint = str([pendingJobs, jobs, servers, clients])
+        #time.sleep(0.5)
+        if str([len(pendingJobs), len(jobs), len(servers), len(clients)]) != oldPrint:
+            print(f"""
+checking for work
+pending jobs: {len(pendingJobs)}
+jobs: {len(jobs)}
+clients: {len(clients)}
+servers: {len(servers)}
+            """)
+            oldPrint = str([len(pendingJobs), len(jobs), len(servers), len(clients)])
         else:
             pass
-
+        """
+        #Go through the clients
+        #for m in clients:
+            #if((time.time() - m.lastActive) > 5 and (time.time() - m.lastPinged) > 1):
+                #print("Broker sending ping to a client")
+                #m.sendPing()
+        """
+        #Go through the servers
         for n in servers:
-            print(f"server has {len(n.jobs)} currently underwork")
+            #print(f"server has {len(n.jobs)} currently underwork")
             # Go through pendingJobs. if taken more than 10 seconds move back to jobs
             t = time.time()
-
             removable = []
             for pjob in pendingJobs:
                 #print(pjob)
-                if pjob.time - t > 10:
+                #print(pjob.time - t)
+                if pjob.time - t < -10:
                     jobs.append(pjob.job)
                     removable.append(pjob)
 
             pendingJobs = [x for x in pendingJobs if x not in removable]
 
-            if((n.lastActive - n.lastPinged) > 10):
+            #Remove servers which were not active within the last 10 seconds
+            if((time.time() - n.lastActive) > 10):
+                n.delete()
+                #print("Removed an inactive server")
+                #print(f"last active {time.time() - n.lastActive}")
+
+            #Ping servers which were not pinged within the last 5 seconds
+            if((time.time() - n.lastActive) > 5 and (time.time() - n.lastPinged) > 1):
+                #print("Broker sending ping to a server")
                 n.sendPing()
 
-            #Check if jobs are available
+            #Check if jobs are available and give them to the available servers
             if(len(jobs) > 0):
                 maxWork = n.maxWork
                 currentWork = len(n.jobs)
-                print("adding work")
+                #print("adding work")
                 #Fill the server with work if it isn't already full
                 if(maxWork > currentWork):
-                    print("found server with free space")
+                    #print("found server with free space")
                     for i in range(maxWork-currentWork):
                         if len(jobs) == 0:
                             break
@@ -341,25 +408,28 @@ def workHandler():
                         except:
                             traceback.print_exc()
 
+#Reads the amount of tasks, servers and clients and writes them in a log file every second.
 def evaluation():
     while True:
         time.sleep(1)
-        print("Writing in evaluation file...")
+        #print("Writing in evaluation file...")
 
         numberOfServers = len(servers)
         numberOfClients = len(clients)
-        numberOfPendingJobs = len(pendingJobs)
+        numberOfpendingJobs = len(pendingJobs)
         numberOfWaitingJobs = len(jobs)
         numberOfJobsOnserver = []
         for n in servers:
             numberOfJobsOnserver.append(len(n.jobs))
-        jsonAbleString = {"timestamp": str(datetime.now()), "servers": numberOfServers, "clients": numberOfClients, "jobs": numberOfJobsOnserver, "pendingJobs": numberOfPendingJobs, "waitingJobs": numberOfWaitingJobs}
+        jsonAbleString = {"timestamp": str(datetime.now()), "servers": numberOfServers, "clients": numberOfClients, "jobs": numberOfJobsOnserver, "pendingJobs": numberOfpendingJobs, "waitingJobs": numberOfWaitingJobs}
         with open("evaluation.txt", "a") as f:
             f.write("\n")
             f.write(json.dumps(jsonAbleString))
 
 def main():
     threadStart(TCPListener)
+    while not ready:
+        time.sleep(0.1)
     threadStart(workHandler)
     threadStart(evaluation)
     try:
@@ -368,7 +438,6 @@ def main():
     except KeyboardInterrupt:
         print("bye bye")
         quit()
-        ## TODO: close things ?
 
 if __name__ == "__main__":
     main()
