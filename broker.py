@@ -22,8 +22,6 @@ pendingJobs = [] # {"job": job, "time":time.time()}
 ready = False
 
 
-## TODO: REMOVE SERVERS THAT DON'T ANSWER TO PING
-
 def getNextID():#client/server/work
     ## Return next id based on the next avaiable id that is also written on disk
     try:
@@ -79,7 +77,7 @@ class Server:
         self.serverID = serverID
         self.sock = sock
         self.jobs = []
-        self.pendingJobs = []
+        #self.pendingJobs = []
         self.maxWork = maxWork
         self.lastActive = time.time()
         self.lastPinged = time.time()
@@ -107,11 +105,11 @@ class Server:
         for job in self.jobs:
             if job.workID==workID and job.number==number:
                 self.jobs.remove(job)
+                #pendingJobs.remove(job)
     def delete(self):
         global servers
         global jobs
         jobs += self.jobs
-        jobs += self.pendingJobs
         servers.remove(self)
         try:
             self.sock.close()
@@ -231,7 +229,6 @@ def serverCommandParser(data, server):
     if data["cmd"]=="ping": #Received ping
         client.send({"cmd": "pong"}) #Respond to ping
     if data["cmd"]=="pong": #Received pong
-        print("Recieved a pong")
         server.lastActive = int(time.time()) #Refresh the lastActive timestamp
     if data["cmd"] == "results": #Received results
         #print("received results")
@@ -246,13 +243,19 @@ def serverCommandParser(data, server):
                     #j.sendResults(data["results"])
     if data["cmd"] == "accept": #Received the job accept message
         global pendingJobs
-        removable = []
+        #removable = []
         #Remove the accepted job from the pendingJobs list
         for pendingjob in pendingJobs:
             job = pendingjob.job
             if job.workID==data["workID"] and job.number==data["number"]:
-                removable.append(pendingjob)
-        pendingJobs = [x for x in pendingJobs if x not in removable]
+                #print("Pendingjob " + str(data["number"]) + " accepted by server " + str(server.serverID))
+                break
+                #removable.append(pendingjob)
+        else:
+            print("Couldn't find accepted pending job in pendingJobs")
+            return
+        pendingJobs.remove(pendingjob)
+        #pendingJobs = [x for x in pendingJobs if x not in removable]
 
 
 def initialHandler(c, a):
@@ -293,6 +296,7 @@ def send(jsonAbleString, s):
 
 #Listens for tcp messages
 def TCPListener(port=PORT):
+    global sock
     try:
         #Create a socket and start listening
         sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
@@ -344,20 +348,8 @@ def workHandler():
     global s
     global clients
     global pendingJobs
-    oldPrint = ""
     while True:
         #time.sleep(0.5)
-        if str([len(pendingJobs), len(jobs), len(servers), len(clients)]) != oldPrint:
-            print(f"""
-checking for work
-pending jobs: {len(pendingJobs)}
-jobs: {len(jobs)}
-clients: {len(clients)}
-servers: {len(servers)}
-            """)
-            oldPrint = str([len(pendingJobs), len(jobs), len(servers), len(clients)])
-        else:
-            pass
         """
         #Go through the clients
         #for m in clients:
@@ -370,15 +362,21 @@ servers: {len(servers)}
             #print(f"server has {len(n.jobs)} currently underwork")
             # Go through pendingJobs. if taken more than 10 seconds move back to jobs
             t = time.time()
-            removable = []
+            #removable = []
+            removed_pjob = None
             for pjob in pendingJobs:
                 #print(pjob)
                 #print(pjob.time - t)
                 if pjob.time - t < -10:
+                    #print("Pending job timeout, returning job to job list!")
                     jobs.append(pjob.job)
-                    removable.append(pjob)
+                    #removable.append(pjob)
+                    removed_pjob = pjob
+                    break
+            if removed_pjob != None:
+                pendingJobs.remove(removed_pjob)
 
-            pendingJobs = [x for x in pendingJobs if x not in removable]
+            #pendingJobs = [x for x in pendingJobs if x not in removable]
 
             #Remove servers which were not active within the last 10 seconds
             if((time.time() - n.lastActive) > 10):
@@ -402,6 +400,7 @@ servers: {len(servers)}
                     for i in range(maxWork-currentWork):
                         if len(jobs) == 0:
                             break
+                        #print(f"adding work to server with {len(n.jobs)}")
                         job = jobs.pop(0)#check if empty / only add as many work as there are
                         try:
                             n.sendJob(job)
@@ -426,17 +425,51 @@ def evaluation():
             f.write("\n")
             f.write(json.dumps(jsonAbleString))
 
+def printStatus():
+    oldPrint = ""
+    while True:
+        time.sleep(1)
+        newPrint =f"""
+checking for work
+pending jobs: {len(pendingJobs)}
+jobs: {len(jobs)}
+clients: {len(clients)}
+servers: {len(servers)}
+"""
+
+        if newPrint != oldPrint:
+            print(newPrint)
+            oldPrint = newPrint
+        else:
+            pass
+
 def main():
     threadStart(TCPListener)
     while not ready:
         time.sleep(0.1)
     threadStart(workHandler)
     threadStart(evaluation)
+    threadStart(printStatus)
     try:
         while True:
             input()
     except KeyboardInterrupt:
         print("bye bye")
+        for server in servers:
+            try:
+                server.sock.close()
+            except:
+                pass
+        for client in clients:
+            try:
+                client.sock.close()
+            except:
+                pass
+        try:
+            sock.close()
+        except:
+            pass
+        time.sleep(2)
         quit()
 
 if __name__ == "__main__":

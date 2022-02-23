@@ -41,5 +41,7 @@ SERVER:
             {"user": "server", "cmd": "join", "id": None, "maxWork": 3}
           receive:
             {"id": 1234}
+      acceptWork:
+          {"user": "server", "id": 123, "cmd": "accept", "workID": 123, "number": 123}
       workdone:
           {"user": "server", "id": 123, "cmd": "results", "workID": 123, "work": number, "results": [5,6,7,8,9]}

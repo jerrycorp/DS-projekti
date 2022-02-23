@@ -84,6 +84,7 @@ def startTCPListener(brokerIP=brokerIP, port=PORT):
             print(e)
             quit()
             s.close()
+            time.sleep()
 
 def join(s):
     s.send(json.dumps({"user": "server", "cmd": "join", "id": serverID, "maxWork": 5*os.cpu_count()}).encode())

@@ -78,7 +78,7 @@ def UILoop():
         elif decision =="random":
             sendWork(randomInputGenerator())
         elif decision =="small":
-            sendWork(randomInputGenerator(100000,100))
+            sendWork(randomInputGenerator(1000000,100))
         elif decision =="file":
             if len(userInput) > 1:
                 requestFromFile(userInput[1])
@@ -228,6 +228,7 @@ def startTCPListener(brokerIP=brokerIP, port=PORT):
             print(e)
             quit()
             s.close()
+            time.sleep(2)
 
 def readID(fileName="clientID"):
     ## Reads the client ID from a text file
